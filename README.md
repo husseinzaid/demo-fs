@@ -69,6 +69,15 @@ Demo web app for technical product market access / CE compliance intake: landing
 - `components/` – Stepper, SurveySection, CopyAsText, UI (Button, Card, Tabs)
 - `lib/` – types, surveys (role/product schemas + defaults + copy-as-text), storage (sessionStore), OpenAI (schema + analyze)
 
+## Deploy on Render
+
+1. Create a **Web Service**, connect the repo, use **Node**.
+2. **Build Command:** `npm install && npm run build`
+3. **Start Command:** `npm run start:render`
+
+   This runs the Next.js **standalone** server so static assets (`_next/static/*.js`, fonts) are served with correct MIME types (avoids "text/plain" / ChunkLoadError in the browser).
+4. Add env vars in Render dashboard: `OPENAI_API_KEY`, `OPENAI_MODEL` (and optionally `OPENAI_REASONING_EFFORT`). No `NODE_ENV` needed (Render sets it).
+
 ## Acceptance criteria (from spec)
 
 - `npm run dev` starts the app.
