@@ -16,6 +16,39 @@ const confidenceEnum = z.enum(["high", "medium", "low"]);
 const regulationTypeEnum = z.enum(["Verordnung", "Richtlinie", "Gesetz", "Leitlinie"]);
 const batteryTypeEnum = z.enum(["Industriebatterie", "Gerätebatterie", "SLI", "LMT", "EV", "Unklar"]);
 
+const compliancePlanSectionSchema = z.object({
+  sectionCode: z.string(),
+  sectionTitle: z.string(),
+  items: z.array(
+    z.object({
+      id: z.string(),
+      requirement: z.string(),
+      evidenceExamples: z.array(z.string()),
+      ownerRoleSuggested: z.string(),
+      statusDefault: z.literal("todo"),
+      tailoring: z.object({
+        applicable: z.boolean(),
+        tailoringReason: z.string().nullable(),
+      }),
+    })
+  ),
+});
+
+export const compliancePlanSchema = z.object({
+  regulationId: z.string(),
+  regulationTitle: z.string(),
+  jurisdiction: z.literal("EU"),
+  applicable: z.boolean(),
+  scopeSummary: z.array(z.string()),
+  checklist: z.array(compliancePlanSectionSchema),
+  outTailoredSections: z.array(
+    z.object({
+      reference: z.string(),
+      reason: z.string(),
+    })
+  ),
+});
+
 export const analysisResultSchema = z.object({
   meta: z.object({
     createdAt: z.string(),
@@ -57,6 +90,15 @@ export const analysisResultSchema = z.object({
         jurisdiction: z.literal("EU"),
         whyApplicable: z.array(z.string()),
         notes: z.array(z.string()),
+        confidence: confidenceEnum,
+        sources: z.array(
+          z.object({
+            title: z.string(),
+            url: z.string(),
+            usedFor: z.array(z.string()),
+          })
+        ),
+        harmonisedStandards: z.array(z.string()),
       })
     ).min(3),
     notApplicable: z.array(
@@ -76,45 +118,7 @@ export const analysisResultSchema = z.object({
     ),
   }),
 
-  compliancePlan: z.object({
-    batteryRegulation_2023_1542: z.object({
-      scopeClassification: z.object({
-        batteryType: batteryTypeEnum,
-        rationale: z.array(z.string()),
-      }),
-      checklist: z.array(
-        z.object({
-          sectionCode: z.string(),
-          sectionTitle: z.string(),
-          items: z.array(
-            z.object({
-              id: z.string(),
-              requirement: z.string(),
-              evidenceExamples: z.array(z.string()),
-              ownerRoleSuggested: z.string(),
-              statusDefault: z.literal("todo"),
-              tailoring: z.object({
-                applicable: z.boolean(),
-                tailoringReason: z.string().nullable(),
-              }),
-            })
-          ).min(3),
-        })
-      ).min(6),
-      outTailoredSections: z.array(
-        z.object({
-          reference: z.string(),
-          reason: z.string(),
-        })
-      ),
-    }),
-    otherRegulationsSummary: z.array(
-      z.object({
-        regulationId: z.string(),
-        whatToDoNext: z.array(z.string()),
-      })
-    ),
-  }),
+  compliancePlans: z.array(compliancePlanSchema),
 
   reportHtml: z.string(),
 });

@@ -12,7 +12,29 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/Tabs";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
-type TabId = "roles" | "regulations" | "battery" | "report";
+type TabId = "roles" | "regulations" | "plans" | "report";
+
+type CompliancePlanItem = NonNullable<AnalysisResult["compliancePlans"]>[number];
+
+function getCompliancePlans(analysis: AnalysisResult): CompliancePlanItem[] {
+  if (analysis.compliancePlans?.length) return analysis.compliancePlans;
+  const leg = analysis.compliancePlan?.batteryRegulation_2023_1542;
+  if (!leg) return [];
+  const scopeSummary = leg.scopeClassification?.rationale ?? [];
+  if (leg.scopeClassification?.batteryType)
+    scopeSummary.unshift(`Batterietyp: ${leg.scopeClassification.batteryType}`);
+  return [
+    {
+      regulationId: "2023/1542",
+      regulationTitle: "Batterie-Verordnung (EU) 2023/1542",
+      jurisdiction: "EU",
+      applicable: leg.applicable !== false,
+      scopeSummary,
+      checklist: leg.checklist ?? [],
+      outTailoredSections: leg.outTailoredSections ?? [],
+    },
+  ] as CompliancePlanItem[];
+}
 
 export default function ResultsPage() {
   const params = useParams();
@@ -107,7 +129,7 @@ export default function ResultsPage() {
         <TabsList value={tab} onValueChange={(v) => setTab(v as TabId)}>
           <TabsTrigger value="roles" activeValue={tab} onSelect={(v) => setTab(v as TabId)}>Rollen</TabsTrigger>
           <TabsTrigger value="regulations" activeValue={tab} onSelect={(v) => setTab(v as TabId)}>Verordnungen</TabsTrigger>
-          <TabsTrigger value="battery" activeValue={tab} onSelect={(v) => setTab(v as TabId)}>Batterie-Verordnung</TabsTrigger>
+          <TabsTrigger value="plans" activeValue={tab} onSelect={(v) => setTab(v as TabId)}>Compliance-Checklisten</TabsTrigger>
           <TabsTrigger value="report" activeValue={tab} onSelect={(v) => setTab(v as TabId)}>Vollständiger Bericht</TabsTrigger>
         </TabsList>
 
@@ -119,8 +141,8 @@ export default function ResultsPage() {
           <RegulationsTab analysis={analysis} />
         </TabsContent>
 
-        <TabsContent value="battery" activeValue={tab} className="mt-4">
-          <BatteryTab
+        <TabsContent value="plans" activeValue={tab} className="mt-4">
+          <CompliancePlansTab
             analysis={analysis}
             sessionId={sessionId}
             checklistState={checklistState}
@@ -201,7 +223,7 @@ function RegulationsTab({ analysis }: { analysis: AnalysisResult }) {
           {(regs.applicable ?? []).map((r, i) => (
             <div key={i} className="rounded border border-emerald-100 bg-emerald-50/50 p-3">
               <p className="font-medium text-slate-800">{r.id} – {r.title}</p>
-              <p className="text-xs text-slate-500">{r.type}</p>
+              <p className="text-xs text-slate-500">{r.type}{r.confidence ? ` · Konfidenz: ${r.confidence}` : ""}</p>
               <ul className="mt-1 list-inside list-disc text-sm text-slate-600">
                 {r.whyApplicable?.map((w, j) => (
                   <li key={j}>{w}</li>
@@ -209,6 +231,26 @@ function RegulationsTab({ analysis }: { analysis: AnalysisResult }) {
               </ul>
               {r.notes?.length > 0 && (
                 <p className="mt-1 text-xs text-slate-500">{r.notes.join(" ")}</p>
+              )}
+              {r.sources?.length > 0 && (
+                <div className="mt-2 border-t border-emerald-200 pt-2">
+                  <p className="text-xs font-medium text-slate-600">Quellen</p>
+                  <ul className="mt-1 space-y-1 text-xs">
+                    {r.sources.map((s, j) => (
+                      <li key={j}>
+                        <a href={s.url} target="_blank" rel="noopener noreferrer" className="text-emerald-700 underline hover:no-underline">
+                          {s.title || s.url}
+                        </a>
+                        {s.usedFor?.length ? ` (${s.usedFor.join(", ")})` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {r.harmonisedStandards?.length > 0 && (
+                <p className="mt-1 text-xs text-slate-600">
+                  <span className="font-medium">Harmonisierte Normen:</span> {r.harmonisedStandards.join(", ")}
+                </p>
               )}
             </div>
           ))}
@@ -253,7 +295,7 @@ function RegulationsTab({ analysis }: { analysis: AnalysisResult }) {
   );
 }
 
-function BatteryTab({
+function CompliancePlansTab({
   analysis,
   sessionId,
   checklistState,
@@ -264,32 +306,113 @@ function BatteryTab({
   checklistState: Record<string, { id: string; status: string; notes?: string }>;
   onUpdate: () => void;
 }) {
-  const plan = analysis.compliancePlan?.batteryRegulation_2023_1542;
-  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const plans = getCompliancePlans(analysis);
+  const applicablePlans = plans.filter((p) => p.applicable);
+  const [selectedIndex, setSelectedIndex] = useState(0);
 
-  if (!plan) return <p className="text-slate-600">Keine Batterie-Checkliste vorhanden.</p>;
+  if (plans.length === 0)
+    return <p className="text-slate-600">Keine Compliance-Checklisten vorhanden.</p>;
 
-  const scope = plan.scopeClassification;
+  if (applicablePlans.length === 0) {
+    return (
+      <div className="space-y-4">
+        <p className="text-slate-600">Keine anwendbaren detaillierten Compliance-Checklisten für dieses Produkt.</p>
+        {plans.some((p) => !p.applicable) && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Nicht anwendbare Regelungen</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {plans.filter((p) => !p.applicable).map((p, i) => (
+                <div key={i} className="rounded border border-slate-100 bg-slate-50 p-3">
+                  <p className="font-medium text-slate-800">{p.regulationId} – {p.regulationTitle}</p>
+                  {(p.outTailoredSections?.length ?? 0) > 0 && (
+                    <ul className="mt-1 list-inside list-disc text-sm text-slate-600">
+                      {p.outTailoredSections?.map((o, j) => (
+                        <li key={j}><strong>{o.reference}:</strong> {o.reason}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    );
+  }
+
+  const selectedPlan = applicablePlans[selectedIndex];
+
+  return (
+    <div className="space-y-4">
+      {applicablePlans.length > 1 && (
+        <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-3">
+          {applicablePlans.map((p, i) => (
+            <button
+              key={p.regulationId}
+              type="button"
+              onClick={() => setSelectedIndex(i)}
+              className={`rounded px-3 py-1.5 text-sm font-medium transition-colors ${
+                i === selectedIndex
+                  ? "bg-emerald-600 text-white"
+                  : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+              }`}
+            >
+              {p.regulationId} {p.regulationTitle.slice(0, 25)}{p.regulationTitle.length > 25 ? "…" : ""}
+            </button>
+          ))}
+        </div>
+      )}
+      {selectedPlan && (
+        <PlanDetailView
+          plan={selectedPlan}
+          sessionId={sessionId}
+          checklistState={checklistState}
+          onUpdate={onUpdate}
+        />
+      )}
+    </div>
+  );
+}
+
+function PlanDetailView({
+  plan,
+  sessionId,
+  checklistState,
+  onUpdate,
+}: {
+  plan: CompliancePlanItem;
+  sessionId: string;
+  checklistState: Record<string, { id: string; status: string; notes?: string }>;
+  onUpdate: () => void;
+}) {
+  const regulationId = plan.regulationId;
+  const sections = plan.checklist ?? [];
+  const [open, setOpen] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(sections.map((s) => [s.sectionCode, true]))
+  );
   const toggle = (id: string) => setOpen((o) => ({ ...o, [id]: !o[id] }));
 
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Einstufung Batterie-Verordnung (EU) 2023/1542</CardTitle>
+          <CardTitle className="text-base">{plan.regulationId} – {plan.regulationTitle}</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="font-medium text-slate-800">Batterietyp: {scope?.batteryType}</p>
-          <ul className="mt-1 list-inside list-disc text-sm text-slate-600">
-            {scope?.rationale?.map((r, i) => (
-              <li key={i}>{r}</li>
-            ))}
-          </ul>
+          {plan.scopeSummary?.length > 0 ? (
+            <ul className="list-inside list-disc text-sm text-slate-600">
+              {plan.scopeSummary.map((s, i) => (
+                <li key={i}>{s}</li>
+              ))}
+            </ul>
+          ) : null}
         </CardContent>
       </Card>
 
       <div className="space-y-2">
-        {plan.checklist?.map((section) => {
+        {sections.map((section) => {
           const sid = section.sectionCode;
           const isOpen = open[sid] ?? true;
           return (
@@ -305,23 +428,26 @@ function BatteryTab({
               {isOpen && (
                 <CardContent className="border-t border-slate-100 pt-4">
                   <ul className="space-y-3">
-                    {section.items?.map((item) => {
+                    {(section.items ?? []).map((item) => {
+                      const compositeId = `${regulationId}|${item.id}`;
                       if (!item.tailoring?.applicable) {
                         return (
                           <li key={item.id} className="rounded border border-slate-100 bg-slate-50 p-3 text-sm text-slate-600">
                             <span className="line-through">{item.requirement}</span>
-                            <p className="mt-1 text-xs text-slate-500">{item.tailoring.tailoringReason}</p>
+                            {item.tailoring.tailoringReason && (
+                              <p className="mt-1 text-xs text-slate-500">{item.tailoring.tailoringReason}</p>
+                            )}
                           </li>
                         );
                       }
-                      const state = checklistState[item.id];
+                      const state = checklistState[compositeId];
                       const status = state?.status ?? "todo";
                       return (
                         <li key={item.id} className="flex items-start gap-3 rounded border border-slate-200 p-3">
                           <select
                             value={status}
                             onChange={(e) => {
-                              updateChecklistItem(sessionId, item.id, { status: e.target.value as "todo" | "in_progress" | "done" });
+                              updateChecklistItem(sessionId, compositeId, { status: e.target.value as "todo" | "in_progress" | "done" });
                               onUpdate();
                             }}
                             className="rounded border border-slate-300 px-2 py-1 text-xs"
@@ -332,9 +458,11 @@ function BatteryTab({
                           </select>
                           <div className="flex-1">
                             <p className="text-sm font-medium text-slate-800">{item.requirement}</p>
-                            <p className="mt-1 text-xs text-slate-500">
-                              Beispiele für Nachweise: {item.evidenceExamples?.join("; ")}
-                            </p>
+                            {item.evidenceExamples?.length > 0 && (
+                              <p className="mt-1 text-xs text-slate-500">
+                                Beispiele für Nachweise: {item.evidenceExamples.join("; ")}
+                              </p>
+                            )}
                             <p className="text-xs text-slate-500">Vorgeschlagener Verantwortlicher: {item.ownerRoleSuggested}</p>
                             <input
                               type="text"
@@ -342,7 +470,7 @@ function BatteryTab({
                               className="mt-2 w-full rounded border border-slate-200 px-2 py-1 text-xs"
                               defaultValue={state?.notes}
                               onBlur={(e) => {
-                                updateChecklistItem(sessionId, item.id, { notes: e.target.value });
+                                updateChecklistItem(sessionId, compositeId, { notes: e.target.value });
                                 onUpdate();
                               }}
                             />

@@ -126,6 +126,9 @@ export type AnalysisResult = {
       jurisdiction: "EU";
       whyApplicable: string[];
       notes: string[];
+      confidence: "high" | "medium" | "low";
+      sources: Array<{ title: string; url: string; usedFor: string[] }>;
+      harmonisedStandards: string[];
     }>;
     notApplicable: Array<{
       id: string;
@@ -140,13 +143,34 @@ export type AnalysisResult = {
     }>;
   };
 
-  compliancePlan: {
-    batteryRegulation_2023_1542: {
-      scopeClassification: {
-        batteryType: "Industriebatterie" | "Gerätebatterie" | "SLI" | "LMT" | "EV" | "Unklar";
-        rationale: string[];
-      };
-      checklist: Array<{
+  /** New: per-regulation compliance plans (dynamic) */
+  compliancePlans?: Array<{
+    regulationId: string;
+    regulationTitle: string;
+    jurisdiction: "EU";
+    applicable: boolean;
+    scopeSummary: string[];
+    checklist: Array<{
+      sectionCode: string;
+      sectionTitle: string;
+      items: Array<{
+        id: string;
+        requirement: string;
+        evidenceExamples: string[];
+        ownerRoleSuggested: string;
+        statusDefault: "todo";
+        tailoring: { applicable: boolean; tailoringReason?: string | null };
+      }>;
+    }>;
+    outTailoredSections: Array<{ reference: string; reason: string }>;
+  }>;
+
+  /** @deprecated Legacy: only present in old stored results; UI migrates to compliancePlans */
+  compliancePlan?: {
+    batteryRegulation_2023_1542?: {
+      applicable?: boolean;
+      scopeClassification?: { batteryType?: string; rationale?: string[] };
+      checklist?: Array<{
         sectionCode: string;
         sectionTitle: string;
         items: Array<{
@@ -154,22 +178,13 @@ export type AnalysisResult = {
           requirement: string;
           evidenceExamples: string[];
           ownerRoleSuggested: string;
-          statusDefault: "todo";
-          tailoring: {
-            applicable: boolean;
-            tailoringReason?: string;
-          };
+          statusDefault: string;
+          tailoring: { applicable: boolean; tailoringReason?: string | null };
         }>;
       }>;
-      outTailoredSections: Array<{
-        reference: string;
-        reason: string;
-      }>;
+      outTailoredSections?: Array<{ reference: string; reason: string }>;
     };
-    otherRegulationsSummary: Array<{
-      regulationId: string;
-      whatToDoNext: string[];
-    }>;
+    otherRegulationsSummary?: Array<{ regulationId: string; whatToDoNext: string[] }>;
   };
 
   reportHtml: string;

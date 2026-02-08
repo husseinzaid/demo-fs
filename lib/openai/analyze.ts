@@ -3,64 +3,42 @@ import { zodTextFormat } from "openai/helpers/zod";
 import { analysisResultSchema, type AnalysisResultSchema } from "./schema";
 import type { RoleSurvey, ProductSurvey } from "@/lib/types";
 
-const SYSTEM_INSTRUCTION = `
-Du bist CE- und Marktzugangs-Experte für technische Produkte (EU-Fokus).
-Arbeite präzise, regulatorisch korrekt und nachvollziehbar.
+const SYSTEM_INSTRUCTION = `You are a CE & market access expert for technical products in the EU.
+Be precise. Do not invent facts. Use the survey data only; if a key fact is missing, add it to needsClarification and avoid assumptions.
+Output must be valid JSON matching the required schema.
 
-WICHTIG:
-- Nutze die Survey-Daten als Primärquelle.
-- Du darfst allgemeines Fachwissen nutzen, ABER: Wenn eine Aussage nicht direkt aus dem Survey folgt, schreibe sie als "Annahme" in productSummary.assumptions oder als Hinweis in notes – und markiere ggf. Klärungsbedarf.
-- Stelle nur dann Fragen in needsClarification, wenn Survey-Daten fehlen/unklar/widersprüchlich sind. Wenn Survey eindeutig ist, KEIN Klärungsbedarf dazu.
-- RED (Richtlinie 2014/53/EU): Nur dann einen RED-Klärungsbedarf in needsClarification aufnehmen, wenn Funk/drahtlos fehlt oder widersprüchlich ist. Wenn der Survey explizit productSurvey.E2_wireless = "no" angibt, darf KEIN RED-Klärungsbedarf gestellt werden.
-- Gib pro Markt genau EINEN Eintrag in roleDetermination.byMarket aus (keine Duplikate).
-- Ausgabe MUSS gültiges JSON gemäß Schema sein.
-- Alle nutzerseitigen Texte auf Deutsch.
-`.trim();
+Language: All strings in all fields (including reasons, whyApplicable, missingInfo, contradictions, titles, notes, reportHtml) must be in German. No English fragments.
 
-const USER_INSTRUCTION_TEMPLATE = `
-Analysiere den folgenden Intake und liefere eine strukturierte Auswertung.
+If you use web search results, prefer official sources (EUR-Lex, EU Commission) and add a "Quellen" section with clickable links in reportHtml.
+Include meta.disclaimer: "Not legal advice; verify with regulatory experts."
 
-Ziele:
-1) Rollenbestimmung je Zielmarkt:
-   - Bestimme Rolle(n) (z.B. Hersteller, Quasi-Hersteller, Importeur, Distributor/Händler, Bevollmächtigter, Dienstleister, Softwarehersteller, Betreiber).
-   - Gib pro Rolle: confidence + reasons (mit Bezug auf konkrete Survey-Felder).
-   - missingInfo und contradictions je Markt befüllen (auch wenn nur "keine" → leere Liste).
+Strictness:
+- If a decisive field is missing (e.g. H2 battery type, capacity, chemistry) → do not infer; mark as Unklar and ask in needsClarification.
+- Exactly one entry per market in roleDetermination.byMarket (no duplicates).
+- For borderline or unclear cases (e.g. PED when only hydraulics is present), do not assert "not applicable" with a strong reason. Put the regime into needsClarification with a specific question instead. Example for PED: "Enthält das Hydrauliksystem Druckspeicher/Behälter oder andere druckhaltende Ausrüstung > 0,5 bar, die als Druckgerät/-zubehör einzustufen wäre?"`;
 
-2) Relevante EU-Regelungen identifizieren (EU/EWR):
-   - Du MUSST jede der folgenden Kandidaten bewerten und EINORDNEN als:
-     a) regulations.applicable, oder
-     b) regulations.notApplicable, oder
-     c) regulations.needsClarification (nur wenn Survey nicht reicht)
-   Kandidatenliste:
-   - Verordnung (EU) 2023/1542 (Batterien)
-   - Richtlinie 2014/35/EU (Niederspannung, LVD) – wenn Spannungsbereich zutrifft
-   - Richtlinie 2014/30/EU (EMV) – wenn elektronische/elektrische Funktionen vorhanden sind
-   - Richtlinie 2006/42/EG bzw. Verordnung (EU) 2023/1230 (Maschinen) – typischerweise nur bei relevanten Maschinenmerkmalen
-   - Richtlinie 2014/53/EU (RED) – nur bei Funk/Radio
-   - Richtlinie 2014/34/EU (ATEX) – nur bei Ex-Umgebung
-   - Verordnung (EU) 2017/745 (MDR) – nur bei medizinischer Zweckbestimmung
-   - Produkthaftung: nenne die aktuell relevante Basis (und ggf. künftige Änderungen als Hinweis)
+const USER_INSTRUCTION_TEMPLATE = `Analyse den folgenden Intake und liefere die strukturierte Auswertung.
 
-   HINWEIS ZUR GPSR (EU) 2023/988:
-   - Nur aufnehmen, wenn das Produkt ein Verbraucherprodukt ist oder vernünftigerweise von Verbrauchern genutzt werden kann; sonst "notApplicable" oder "notes".
+1) Rollen je Zielmarkt: Rolle(n) mit Konfidenz und Gründen. missingInfo und contradictions pro Markt. Genau ein Eintrag pro Markt (keine Duplikate).
 
-3) Battery Regulation 2023/1542: Tailorierte Compliance-Checkliste erstellen
-   - Nutze die Produkt-Survey-Felder H1_batteryCapacityKwh, H2_batteryCategory, H3/H4/H5 (Kobalt, Nickel, Naturgraphit) sofern angegeben – sie steuern Batteriepass-Schwellen, Due Diligence und Einstufung (portable/industrial/EV/LMT).
-   - Liefere mindestens 6 Checklist-Sektionen, jede Sektion mindestens 3 Items.
-   - Abdecken: Sicherheit/Risikoanalyse, Konformitätsbewertung + Unterlagen, Kennzeichnung/Information, Batteriepass-Readiness (gestaffelt), Lieferkette/Due Diligence (besonders bei Kobalt/Nickel/Graphite), Post-Market/Marktüberwachung.
-   - Out-Tailoring: liste nicht zutreffende Themen als outTailoredSections mit Begründung.
-   - Wenn H1/H2 fehlen, setze needsClarification oder productSummary.assumptions.
+2) Anwendbare EU-Regelungen identifizieren – ausschließlich anhand des Surveys, keine vorgegebene feste Liste:
+   Für jede in Frage kommende Regelung: einordnen als applicable / notApplicable / needsClarification (mit Begründung).
+   Logik: Wenn im Produkt Batterien vorkommen → EU 2023/1542 (Batterien) prüfen. Wenn Funk/drahtlos → RED. Wenn Maschine (bewegte Teile, Maschinenfunktion) → Maschinenrichtlinie/-verordnung prüfen. Wenn nur Verbraucherprodukt und keine sektorspezifische Sicherheitsregelung greift → GPSR prüfen. Wenn elektrisch > 50 V AC / 75 V DC und keine Maschine → LVD prüfen. Wenn Maschine: LVD nicht als eigene anwendbare Regelung listen – elektrische Sicherheit wird über die Maschinenrichtlinie abgedeckt; EN 60204-1 ggf. als relevante Norm unter Maschine nennen, nicht als LVD-harmonisiert. Wenn EMV-relevant (elektronisch/elektrisch) → EMV. Wenn Ex-Umgebung → ATEX. Wenn medizinischer Zweck → MDR. Wenn Druckgerät/Behälter > 0,5 bar im Anwendungsbereich → Druckgeräterichtlinie (PED); bei Unklarheit (z. B. nur Hydraulik) → needsClarification mit konkreter Frage, nicht "nicht anwendbar".
+   Keine Anker-Beispiele wie "Battery Regulation für Li-Ion Industriebatterie" – rein bedingungsbasiert aus dem Survey.
 
-4) reportHtml:
-   - Erstelle einen vollständigen Bericht auf Deutsch (Überschriften, Tabellen, Bullet-Listen).
-   - Muss konsistent zu den strukturierten Feldern sein.
+3) Compliance-Checklisten (compliancePlans):
+   Erstelle für jede Regelung in regulations.applicable einen Eintrag in compliancePlans (regulationId, regulationTitle, jurisdiction "EU", applicable, scopeSummary, checklist, outTailoredSections).
+   Erstelle keine Checkliste für Regelungen in notApplicable.
+   Für die 1–2 regulatorisch höchstrangigen/risikorelevanten Regelungen: detaillierte Checkliste (mehrere Sektionen mit konkreten Anforderungspunkten, evidenceExamples, ownerRoleSuggested, tailoring). Für die übrigen anwendbaren Regelungen: kürzere Checkliste oder wenige Sektionen mit Überblickspunkten.
+   Wo klar begründet: out-tailoren (outTailoredSections mit reference + reason). Nicht anwendbare Regelungen haben keinen Eintrag in compliancePlans.
+
+4) reportHtml: Vollständiger Bericht auf Deutsch (Überschriften, Tabellen, Aufzählungen). Bei genutzten Quellen "Quellen"-Abschnitt mit klickbaren Links.
 
 Role survey (JSON):
 {{ROLE_SURVEY}}
 
 Product survey (JSON):
-{{PRODUCT_SURVEY}}
-`.trim();
+{{PRODUCT_SURVEY}}`;
 
 export function buildAnalyzePrompt(roleSurvey: RoleSurvey, productSurvey: ProductSurvey): string {
   return USER_INSTRUCTION_TEMPLATE
@@ -80,8 +58,7 @@ export async function runAnalysis(
     model: options.model,
     instructions: SYSTEM_INSTRUCTION,
     input: userContent,
-    // If you use a reasoning model, keep this; otherwise harmless.
-    reasoning: options.reasoningEffort ? { effort: options.reasoningEffort as any } : undefined,
+    reasoning: options.reasoningEffort ? { effort: options.reasoningEffort as "low" | "medium" | "high" } : undefined,
     text: {
       format: zodTextFormat(analysisResultSchema, "AnalysisResult"),
     },
@@ -95,8 +72,9 @@ export async function runAnalysis(
   if (!result.meta.createdAt) result.meta.createdAt = new Date().toISOString();
   result.meta.model = options.model;
   result.meta.jurisdictionFocus = "EU";
+  if (!result.meta.disclaimer) result.meta.disclaimer = "Not legal advice; verify with regulatory experts.";
 
-  // De-duplicate byMarket: group by market, merge roles + reasons, unique missingInfo/contradictions
+  // De-duplicate byMarket: one entry per market, merge roles, unique missingInfo/contradictions
   const byMarketMap = new Map<string, (typeof result.roleDetermination.byMarket)[number]>();
   for (const entry of result.roleDetermination.byMarket ?? []) {
     const existing = byMarketMap.get(entry.market);
