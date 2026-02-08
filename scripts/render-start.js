@@ -25,10 +25,9 @@ if (existsSync(join(root, ".next", "static"))) {
   cpSync(join(root, ".next", "static"), join(standaloneNext, "static"), { recursive: true });
 }
 
-const server = join(standalone, "server.js");
-const child = spawn(process.execPath, [server], {
+const child = spawn(process.execPath, ["server.js"], {
   stdio: "inherit",
   env: { ...process.env, PORT: process.env.PORT || "3000" },
-  cwd: root,
+  cwd: standalone,
 });
 child.on("exit", (code) => process.exit(code ?? 0));
